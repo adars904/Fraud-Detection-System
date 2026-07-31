@@ -1048,4 +1048,110 @@ def email_match(df):
     return df
 
 x_train = email_match(x_train)
-x_test = email_match(x_test)
+x_test = email_match(x_test)  
+# ==============================================================================
+#                            FEATURE SPLITTING
+# ==============================================================================
+
+# Why are we doing this?
+# -----------------------
+# After feature construction, our dataset contains a mix of original columns
+# and newly engineered columns (TransactionAmt_log, uid_TransactionAmt_mean,
+# P_email_provider, etc.). Before we can encode categorical features next,
+# we need to organize all columns into clear groups:
+#
+# 1. Numerical columns          -> used directly / scaled if needed
+# 2. Low-cardinality categorical -> safe for One-Hot Encoding
+# 3. High-cardinality categorical -> needs Ordinal/Frequency Encoding instead
+# 4. Helper/dropped columns      -> no longer needed after their purpose is served
+#
+# Splitting columns this way avoids applying the wrong encoding method to the
+# wrong column, which could otherwise explode the dataset size (One-Hot on a
+# high-cardinality column can create hundreds/thousands of sparse columns)
+# or lose useful information (treating a helper ID column as a real feature).
+
+
+# ------------------------------------------------------------------------------
+# STEP 1: Drop columns that are no longer needed
+# ------------------------------------------------------------------------------
+# uid:
+#   'uid' was only created as a temporary helper column (a pseudo customer ID
+#   built from card/addr columns). It was used to calculate
+#   'uid_TransactionAmt_mean' and 'uid_TransactionAmt_std'. Since those
+#   features already capture the useful information from uid, keeping the
+#   raw 'uid' column would be harmful - it has thousands of unique values
+#   (almost one per transaction), so One-Hot Encoding it would create
+#   thousands of useless sparse columns and risk overfitting.
+#
+# P_emaildomain / R_emaildomain:
+#   Both columns have around ~58-60 unique raw domain values (gmail.com,
+#   yahoo.com, hotmail.co.uk, etc.), making them high-cardinality and hard
+#   to encode directly. We already engineered cleaner, low-cardinality
+#   versions of this same information earlier - 'P_email_provider' and
+#   'R_email_provider' (only 5 categories each: gmail, yahoo, microsoft,
+#   anonymous, other). Since the provider columns capture the same signal
+#   in a much cleaner form, the raw domain columns are redundant and are
+#   dropped to avoid encoding the same information twice.
+
+x_train = x_train.drop(columns=["uid", "P_emaildomain", "R_emaildomain"])
+x_test = x_test.drop(columns=["uid", "P_emaildomain", "R_emaildomain"])
+
+
+# ------------------------------------------------------------------------------
+# STEP 2: Recompute numerical and categorical columns
+# ------------------------------------------------------------------------------
+# We recompute this AFTER dropping the columns above and AFTER feature
+# construction, because the earlier lists (used during missing value
+# imputation) are now outdated - they don't include new engineered features
+# and still include the columns we just dropped.
+
+numerical_features1 = x_train.select_dtypes(include=['int64', 'float64'])
+cateorical_features1 = x_train.select_dtypes(include=['object'])
+numerical_features1=numerical_features1.columns.tolist()
+cateorical_features1 = cateorical_features1.columns.tolist()
+
+#for col in cateorical_features1:
+    #print(col, x_train[col].nunique())
+
+
+# ------------------------------------------------------------------------------
+# STEP 3: Split categorical columns by cardinality
+# ------------------------------------------------------------------------------
+# We count how many unique categories each categorical column has, using
+# .nunique(). This tells us which encoding method is appropriate:
+#
+#   - Low-cardinality columns (few categories) -> One-Hot Encoding is safe,
+#     since it won't create too many new columns.
+#   - High-cardinality columns (many categories) -> One-Hot Encoding would
+#     create hundreds/thousands of sparse columns, so Ordinal or Frequency
+#     Encoding is used instead.
+#
+# A cutoff of 10 unique values is used to separate the two groups. This
+# cutoff was chosen after inspecting the actual data: most categorical
+# columns had between 2-6 unique values, while a small number
+# (P_emaildomain, R_emaildomain, id_31, id_33, DeviceInfo) had 59 to 1686
+# unique values - a clear, natural gap with no ambiguous middle ground.
+
+cardinality = x_train[cateorical_features1].nunique()
+
+low_card_cols = cardinality[cardinality <= 10].index.tolist()
+high_card_cols = cardinality[cardinality > 10].index.tolist()
+
+
+# ------------------------------------------------------------------------------
+# STEP 4: Sanity check - confirm every column is accounted for
+# ------------------------------------------------------------------------------
+# Before moving to encoding, we verify that every column in x_train belongs
+# to exactly one of our three groups (numerical, low-cardinality categorical,
+# high-cardinality categorical). If the two totals below don't match, it
+# means a column was either missed or counted twice, which would cause
+# problems later when building the ColumnTransformer.
+
+total_cols = x_train.shape[1]
+accounted_cols = len(numerical_features1) + len(low_card_cols) + len(high_card_cols)
+
+#print("Total columns in x_train:", total_cols)
+#print("Accounted columns:", accounted_cols)  
+print("uid" in x_train.columns)
+print(x_train["uid"].head())
+
