@@ -1,0 +1,15 @@
+# Numerical Data Cleaning Summary
+
+* Identified all numerical columns in the dataset.
+* Verified the data types of all numerical features.
+* Checked for negative values across all numerical columns.
+* Negative values were found only in some `D` and `id_*` features. These values were not modified because they are valid according to the dataset and feature definitions.
+* Analyzed missing values for all numerical columns.
+* Found that 10 numerical columns contain more than 90% missing values. These columns were identified as candidates for removal, but no columns were dropped during the data-cleaning stage. The final decision will be made during preprocessing after evaluating their usefulness.
+* Observed that many numerical features contain zero values. These were retained because zero is a valid value for many engineered features and does not necessarily represent missing data.
+* Examined the distributions of important numerical features:
+
+  * `TransactionAmt` is right-skewed, with the mean significantly greater than the median.
+  * `TransactionDT` is approximately symmetric, with the mean and median being nearly equal.
+* Outlier removal was not performed because the project uses tree-based machine learning models, which are generally robust to outliers. In fraud detection, extreme values may represent fraudulent transactions and therefore contain useful information.
+* Numerical data cleaning has been completed. Feature transformations such as missing value imputation, column removal, encoding, and scaling will be performed during the preprocessing stage.

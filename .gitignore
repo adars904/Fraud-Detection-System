@@ -1,0 +1,7 @@
+Aenv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/  
+train_identity.csv
+train_identity.csv
+train_transaction.csv
