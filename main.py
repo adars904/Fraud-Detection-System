@@ -198,8 +198,11 @@ from sklearn.model_selection import train_test_split
 x=df3.drop(columns=["isFraud"])
 y=df3["isFraud"] 
 x_train,x_test,y_train,y_test=train_test_split(x,y,test_size=0.2,random_state=42,stratify=y) 
-            #=============================================================
-            # HANDLING MISSING VALUE   
+#==============================================================================
+#                    DROP HIGH-MISSING COLUMNS (>99% missing)
+# ==============================================================================
+# Imputing columns with ~99% missing values is unlikely to produce reliable
+# values and may introduce noise - dropped before further preprocessing.
 # before droppint the column we check the missing invvolment in the fraud and non fraud transaction 
 high_missing_cols = ['id_24','id_25','id_07','id_08','id_21','id_26','id_22','dist2','D7','id_18']
 
@@ -213,27 +216,15 @@ high_missing_cols = ['id_24','id_25','id_07','id_08','id_21','id_26','id_22','di
 # Imputing such columns is unlikely to produce reliable values and may
 # introduce unnecessary noise into the model. Therefore, these features
 # are dropped as part of the initial data preprocessing step. 
+
 removed_cols=["id_24","id_25","id_07","id_08","id_21","id_26","id_22"]
 for col in removed_cols:
     x_train.drop(columns=[col],inplace=True)
     x_test.drop(columns=[col],inplace=True)  
-a=x_train.select_dtypes(include=['int64','float64']).isnull().sum()
-a=a[a>0].index.tolist() 
-b=x_train.select_dtypes(include=['object']).isnull().sum()
-b=b[b>0].index.tolist()
-#print("numerical columns with missing values:",a) #here we store all the numerical columns having missing value in a list 
-#print("categorical columns with missing values:",b) #here we store all the categorical columns having missing value in a list 
-#===================================================================================
 from sklearn.impute import SimpleImputer 
 from sklearn.compose import ColumnTransformer 
-missingvalue_transformer = ColumnTransformer(
-    transformers=[
-    ('missingnumerical_column', SimpleImputer(strategy='median'), a),
-    ('missingcategorical_column', SimpleImputer(strategy='most_frequent'), b)
-    ]
-)  #Here we use the simple imputer to fill the missing value in numerical column with median and in categorical column with most frequent value  
-
-#       FUNCTION TRANSFORMER ===================================================  
+ 
+#====== ===FUNCTION TRANSFORMER ===================================================  
 #=======first we find the numerical column  name in train dataset            
 numerical_columntrain = x_train.select_dtypes(include=['int64','float64']).columns
 numerical_columntrain = list(numerical_columntrain)
@@ -441,7 +432,31 @@ x_test=TransactionAmt_decimal(x_test)
 # No.
 #
 # The uid is created only by combining values from the current row.
-# No information from other transactions is used.
+# No information from other transactions is used. 
+# ==============================================================================
+# NOTE: Missing values in uid source columns (card2, card3, card5, addr1, addr2)
+# ==============================================================================
+# card2, card3, card5, addr1, addr2 contain missing values in this dataset.
+#
+# When these columns are converted using .astype(str) inside the uid()
+# function, any NaN becomes the literal string "nan" instead of throwing
+# an error.
+#
+# Example:
+# card1 = 1234, card2 = NaN, card3 = 185, card5 = 226, addr1 = NaN, addr2 = 87
+# uid = "1234_nan_185_226_nan_87"
+#
+# This does NOT cause a crash - the code runs fine.
+#
+# However, it means multiple different transactions with missing
+# card2/card3/card5/addr1/addr2 can end up sharing the same "nan"-containing
+# uid, even if they actually belong to different real users.
+#
+# This is not an error, but it is a data quality tradeoff to be aware of:
+# uid-based features (uid_TransactionAmt_mean, uid_TransactionAmt_std,
+# Amt_to_mean_ratio) may be slightly less accurate for these rows, since
+# they are grouped with other unrelated users who also had missing values
+# in the same columns.
 
 # New Feature Created
 # -------------------
@@ -850,7 +865,31 @@ x_test=Amt_to_mean_ratio(x_test)
 
 # ==============================================================================
 # CODE
+# ============================================================================== 
 # ==============================================================================
+# NOTE: Missing value check inside email_provider()
+# ==============================================================================
+# def email_provider(domain):
+#     if pd.isna(domain):
+#         return np.nan
+#
+# pd.isna(domain) checks whether the current value is missing (NaN/None).
+#
+# If the domain is missing, the function immediately returns np.nan and
+# stops - it does NOT try to run domain.lower() or any string operation
+# on it.
+#
+# Why is this necessary?
+# -----------------------
+# Without this check, a missing value (NaN) would reach the next line:
+#     domain = domain.lower()
+#
+# NaN is a float, not a string, so calling .lower() on it would crash with:
+#     AttributeError: 'float' object has no attribute 'lower'
+#
+# So this is an explicit, intentional missing-value guard - it prevents
+# the function from erroring out on missing P_emaildomain / R_emaildomain
+# values, and safely passes the missingness forward instead of crashing.
 
 def email_provider(domain):
     if pd.isna(domain):
@@ -952,7 +991,31 @@ x_test = add_email_provider(x_test)
 # Step 2 : Identify its provider.
 # Step 3 : Return the provider name.
 # Step 4 : Store the provider in a new feature
-#          called R_email_provider. 
+#          called R_email_provider.  
+# ==============================================================================
+# NOTE: Missing value check inside email_provider()
+# ==============================================================================
+# def email_provider(domain):
+#     if pd.isna(domain):
+#         return np.nan
+#
+# pd.isna(domain) checks whether the current value is missing (NaN/None).
+#
+# If the domain is missing, the function immediately returns np.nan and
+# stops - it does NOT try to run domain.lower() or any string operation
+# on it.
+#
+# Why is this necessary?
+# -----------------------
+# Without this check, a missing value (NaN) would reach the next line:
+#     domain = domain.lower()
+#
+# NaN is a float, not a string, so calling .lower() on it would crash with:
+#     AttributeError: 'float' object has no attribute 'lower'
+#
+# So this is an explicit, intentional missing-value guard - it prevents
+# the function from erroring out on missing P_emaildomain / R_emaildomain
+# values, and safely passes the missingness forward instead of crashing.
 def email_provider(domain):
     if pd.isna(domain):
         return np.nan
@@ -1095,11 +1158,48 @@ x_test = email_match(x_test)
 
 x_train = x_train.drop(columns=["uid", "P_emaildomain", "R_emaildomain"])
 x_test = x_test.drop(columns=["uid", "P_emaildomain", "R_emaildomain"])
+# Numerical columns with missing values - check BOTH train and test,
+# since some columns may have missing values only in test
+# (e.g. uid_TransactionAmt_mean/std - unseen uid combinations in test
+# produce NaN even though the same column is fully populated in train) 
+# ------------------------------------------------------------------------------
+# STEP  Missing-value column lists - check BOTH train and test
+# ------------------------------------------------------------------------------
+# Some columns (e.g. uid_TransactionAmt_mean/std) have zero missing values in
+# x_train but CAN have missing values in x_test (unseen uid combinations map
+# to NaN). Checking both sets and combining avoids leftover NaNs after
+# imputation
+a_train = x_train.select_dtypes(include=['int64','float64']).isnull().sum()
+a_train = a_train[a_train > 0].index.tolist()
+
+a_test = x_test.select_dtypes(include=['int64','float64']).isnull().sum()
+a_test = a_test[a_test > 0].index.tolist()
+
+a_combined = list(set(a_train) | set(a_test))
+
+# Categorical columns with missing values - same logic
+b_train = x_train.select_dtypes(include=['object']).isnull().sum()
+b_train = b_train[b_train > 0].index.tolist()
+
+b_test = x_test.select_dtypes(include=['object']).isnull().sum()
+b_test = b_test[b_test > 0].index.tolist()
+
+b_combined = list(set(b_train) | set(b_test))
+
+missingvalue_transformer = ColumnTransformer(
+    transformers=[
+        ('missingnumerical_column', SimpleImputer(strategy='median'), a_combined),
+        ('missingcategorical_column', SimpleImputer(strategy='most_frequent'), b_combined)
+    ],
+    remainder='passthrough',
+    verbose_feature_names_out=False
+)
+missingvalue_transformer.set_output(transform="pandas")
 
 
 # ------------------------------------------------------------------------------
 # STEP 2: Recompute numerical and categorical columns
-# ------------------------------------------------------------------------------
+# ---------------6---------------------------------------------------------------
 # We recompute this AFTER dropping the columns above and AFTER feature
 # construction, because the earlier lists (used during missing value
 # imputation) are now outdated - they don't include new engineered features
@@ -1152,6 +1252,24 @@ accounted_cols = len(numerical_features1) + len(low_card_cols) + len(high_card_c
 
 #print("Total columns in x_train:", total_cols)
 #print("Accounted columns:", accounted_cols)  
-print("uid" in x_train.columns)
-print(x_train["uid"].head())
+#print("uid" in x_train.columns) 
+#encoding cateorical values      
+ #==============================================================================
+#                      ENCODING CATEGORICAL FEATURES
+# ============================================================================== 
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder  
+encoding_transformer=ColumnTransformer(
+    transformers=[
+        ('low_cardinality', OneHotEncoder(sparse_output=False,handle_unknown='ignore'), low_card_cols),
+        ('high_cardinality', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1), high_card_cols)
+    ],
+    remainder='passthrough',
+    verbose_feature_names_out=False
+) 
+encoding_transformer.set_output(transform="pandas") 
+
+
+
+
+
 
