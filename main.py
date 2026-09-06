@@ -1527,4 +1527,190 @@ print(f"PR-AUC (Average Precision): {pr_auc:.4f}")
 # class). This is exactly why accuracy was never used as the scoring metric
 # for GridSearchCV, and why precision/recall/F1/PR-AUC are reported above
 # instead of relying on accuracy alone.
+# ==============================================================================  
 # ==============================================================================
+#                   SECOND MODEL: XGBoost (RandomForest is unchanged above)
+# ==============================================================================
+ 
+# WHAT:
+# We train a second, independent pipeline using XGBoost instead of
+# RandomForest, so we can compare the two models on identical
+# train/validation/test splits and pick whichever one actually performs
+# better - without touching or overwriting the RandomForest pipeline,
+# best_model, best_threshold, or any of its results above.
+#
+# WHY XGBoost is worth trying:
+# Gradient-boosted trees build each new tree to correct the errors of the
+# previous ones, rather than averaging many independent trees like
+# RandomForest does. On rare-event tabular problems like fraud detection,
+# this sequential error-correction often produces noticeably better
+# PR-AUC/recall at a given precision level than RandomForest.
+#
+# Requires: pip install xgboost
+from xgboost import XGBClassifier
+from sklearn.base import clone
+ 
+# ------------------------------------------------------------------------------
+# STEP: Build fresh (unfitted) copies of the shared preprocessing steps
+# ------------------------------------------------------------------------------
+# WHAT: missingvalue_transformer, encoding_transformer, and feature_selector
+# were already fit once inside the RandomForest pipeline above (as part of
+# grid_search.fit()). Reusing those same fitted objects directly inside a
+# second Pipeline would be unsafe - fitting the new XGBoost pipeline would
+# silently overwrite their learned state (fitted medians, encoder
+# categories, selected features), which could corrupt best_model from the
+# RandomForest run if it were ever re-used afterward (e.g. for further
+# analysis) in the same script/session.
+# WHY clone(): sklearn's clone() creates a new, unfitted estimator with the
+# same hyperparameters/configuration - not a fitted copy - so the XGBoost
+# pipeline gets its own independent preproce
+# ssing state, learned freshly
+# inside its own GridSearchCV folds, exactly like the RandomForest pipeline
+# did. UIDFeatureTransformer is likewise instantiated fresh for the same
+# reason (it stores fitted uid_mean_/uid_std_ after fit()).
+missingvalue_transformer_xgb = clone(missingvalue_transformer)
+encoding_transformer_xgb = clone(encoding_transformer)
+feature_selector_xgb = clone(feature_selector)
+ 
+# ------------------------------------------------------------------------------
+# STEP: Handle class imbalance the XGBoost way
+# ------------------------------------------------------------------------------
+# WHAT: XGBoost has no class_weight='balanced' option like RandomForest.
+# Its equivalent is scale_pos_weight, a single number applied to the
+# positive (fraud) class's gradient during training.
+# WHY computed from y_train_model (not y_train or the full dataset): this
+# keeps the imbalance-handling consistent with "learn only from the
+# training portion" - the same principle already used for UID statistics,
+# imputation, and encoding elsewhere in this script.
+scale_pos_weight_value = (y_train_model == 0).sum() / (y_train_model == 1).sum()
+ 
+xgb_pipeline = Pipeline(steps=[
+ 
+    # Same UID feature engineering as the RandomForest pipeline, but a
+    # fresh instance so its fitted uid_mean_/uid_std_ don't collide with
+    # the RandomForest pipeline's own UIDFeatureTransformer instance.
+    ('uid_features', UIDFeatureTransformer()),
+ 
+    ('missing_values', missingvalue_transformer_xgb),
+ 
+    ('encoding', encoding_transformer_xgb),
+ 
+    ('feature_selection', feature_selector_xgb),
+ 
+    ('classifier', XGBClassifier(
+        random_state=42,
+        scale_pos_weight=scale_pos_weight_value,
+        eval_metric='logloss',   # avoids an XGBoost warning; does not change training behaviour
+        tree_method='hist',      # much faster on ~470k rows; does not change what is learned, only training speed
+        n_jobs=1
+    ))
+])
+ 
+# ------------------------------------------------------------------------------
+# STEP: Hyperparameter grid - same size/shape as the RandomForest grid
+# ------------------------------------------------------------------------------
+# WHAT each hyperparameter controls:
+#   - classifier__n_estimators: number of boosting rounds (trees added
+#     sequentially). More rounds can improve fit but risks overfitting and
+#     takes longer.
+#   - classifier__max_depth: how deep each individual tree is allowed to
+#     grow. XGBoost trees are typically shallower than RandomForest trees
+#     (3-6 is common) because boosting adds many trees rather than relying
+#     on a few deep ones.
+#   - classifier__min_child_weight: XGBoost's closest analogue to
+#     RandomForest's min_samples_leaf - the minimum sum of instance weight
+#     needed in a child node. Larger values make the model more
+#     conservative (less likely to overfit rare, noisy patterns).
+#
+# This grid intentionally mirrors the RandomForest grid's shape (2 values
+# x 2 values x 2 values = 8 combinations, x 3 CV folds = 24 fits), per the
+# same "same size, most thorough" search used for RandomForest above.
+param_grid_xgb = {
+    'classifier__n_estimators': [100, 300],
+    'classifier__max_depth': [3, 6],
+    'classifier__min_child_weight': [1, 5]
+}
+ 
+grid_search_xgb = GridSearchCV(
+    estimator=xgb_pipeline,
+    param_grid=param_grid_xgb,
+    scoring='average_precision',
+    cv=cv_strategy,      # same StratifiedKFold strategy used for RandomForest, for a fair comparison
+    n_jobs=1,
+    verbose=2,
+    refit=True
+)
+ 
+# Fit ONLY on x_train_model/y_train_model - identical training data to the
+# RandomForest pipeline, so the two models are compared fairly. Neither
+# x_val nor x_test is used here.
+grid_search_xgb.fit(x_train_model, y_train_model)
+ 
+print("Best XGBoost hyperparameters found:", grid_search_xgb.best_params_)
+print("Best XGBoost cross-validated average_precision score (on training folds only):", grid_search_xgb.best_score_)
+ 
+best_model_xgb = grid_search_xgb.best_estimator_
+ 
+# ------------------------------------------------------------------------------
+# STEP: Threshold selection for XGBoost on the validation set (same method
+# used for RandomForest above - x_test is not touched here either)
+# ------------------------------------------------------------------------------
+val_probabilities_xgb = best_model_xgb.predict_proba(x_val)[:, 1]
+ 
+best_threshold_xgb = 0.5
+best_val_f1_xgb = -1
+ 
+for threshold in candidate_thresholds:
+    val_preds_xgb = (val_probabilities_xgb >= threshold).astype(int)
+    current_f1_xgb = f1_score(y_val, val_preds_xgb)
+    if current_f1_xgb > best_val_f1_xgb:
+        best_val_f1_xgb = current_f1_xgb
+        best_threshold_xgb = threshold
+ 
+print("Best XGBoost threshold selected on validation set:", best_threshold_xgb)
+print("Validation F1-score at best XGBoost threshold:", best_val_f1_xgb)
+ 
+# ------------------------------------------------------------------------------
+# STEP: Final evaluation of XGBoost on the untouched test set
+# ------------------------------------------------------------------------------
+# This is the first and only time x_test/y_test are used for the XGBoost
+# model - identical discipline to the RandomForest evaluation above.
+y_pred_proba_xgb = best_model_xgb.predict_proba(x_test)[:, 1]
+y_pred_xgb = (y_pred_proba_xgb >= best_threshold_xgb).astype(int)
+ 
+print("\nXGBoost Confusion Matrix (rows = actual, columns = predicted):")
+print(confusion_matrix(y_test, y_pred_xgb))
+ 
+print("\nXGBoost Classification Report:")
+print(classification_report(y_test, y_pred_xgb, target_names=["Not Fraud", "Fraud"]))
+ 
+roc_auc_xgb = roc_auc_score(y_test, y_pred_proba_xgb)
+print(f"\nXGBoost ROC-AUC: {roc_auc_xgb:.4f}")
+ 
+pr_auc_xgb = average_precision_score(y_test, y_pred_proba_xgb)
+print(f"XGBoost PR-AUC (Average Precision): {pr_auc_xgb:.4f}")
+ 
+ 
+# ==============================================================================
+#                   MODEL COMPARISON: RandomForest vs XGBoost
+# ==============================================================================
+ 
+# WHAT:
+# Compare both models on the same untouched x_test using PR-AUC as the
+# primary metric, since this dataset is highly imbalanced and PR-AUC (see
+# the IMPORTANT REMINDER above) is the metric that best reflects
+# performance on the rare fraud class.
+# WHY PR-AUC and not accuracy/ROC-AUC as the deciding metric: consistent
+# with the reasoning already used throughout this script for choosing
+# scoring='average_precision' in GridSearchCV.
+print("\n" + "=" * 60)
+print("MODEL COMPARISON (test set, same split for both models)")
+print("=" * 60)
+print(f"RandomForest  -> PR-AUC: {pr_auc:.4f} | ROC-AUC: {roc_auc:.4f}")
+print(f"XGBoost       -> PR-AUC: {pr_auc_xgb:.4f} | ROC-AUC: {roc_auc_xgb:.4f}")
+ 
+if pr_auc_xgb > pr_auc:
+    print("\nBest model (by PR-AUC): XGBoost")
+else:
+    print("\nBest model (by PR-AUC): RandomForest")
+ 
