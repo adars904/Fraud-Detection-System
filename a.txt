@@ -1,0 +1,46 @@
+Fraud detection/
+│
+├── data/
+│   ├── train_identity.csv
+│   ├── train_transaction.csv
+│   └── split_data.py                  # train_test_split_data(), train_val_split_data()
+│
+├── eda/
+│   └── explore.py                     # load_and_merge_data(), EDA functions
+│
+├── cleaning/
+│   └── clean_data.py                  # clean_data() — categorical + numerical cleaning
+│
+├── features/
+│   ├── drop_high_missing.py           # drop_high_missing_cols()
+│   ├── function_transformer.py        # check_skew()
+│   ├── feature_construction.py        # transaction_amt(), TransactionAmt_decimal(), uid(),
+│   │                                   # construct_features(), UIDFeatureTransformer class
+│   ├── feature_split.py               # split_features()
+│   └── feature_selection.py           # build_feature_selector()
+│
+├── preprocessing/
+│   └── encoding_transformer.py        # build_encoding_transformer()
+│
+├── modeling/
+│   ├── pipeline.py                    # build_fraud_pipeline() — RandomForest
+│   ├── cv_strategy.py                 # build_cv_strategy()
+│   ├── tuning.py                      # build_grid_search() — RandomForest
+│   ├── best_model.py                  # get_best_model()
+│   ├── xgb_pipeline.py                # build_xgb_pipeline() — XGBoost
+│   └── xgb_tuning.py                  # build_xgb_grid_search() — XGBoost
+│
+├── threshold/
+│   └── threshold_selection.py         # select_best_threshold() — used for both models
+│
+├── evaluation/
+│   ├── evaluate.py                    # evaluate_model() — used for both models
+│   └── compare_models.py              # compare_models()
+│
+├── main.py                            # orchestrates the entire pipeline end-to-end
+├── .gitignore
+├── a.txt
+├── checking.txt
+├── datacleaning.txt
+├── README.md
+└── requirements.txt
